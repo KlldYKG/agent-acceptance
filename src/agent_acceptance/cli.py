@@ -76,7 +76,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
     print(f"evidence: {out_dir / 'evidence.json'}")
 
     if gate and not args.report_only:
-        if ev.verdict == "INVALID_EVIDENCE":
+        if ev.verdict in ("INVALID_EVIDENCE", "ERROR"):
+            # No usable evidence at all (incl. collection failures) -> invalid.
             return xc.GATE_INVALID_EVIDENCE
         if any(t.verdict == "BROKEN" for t in ev.tests):
             return xc.GATE_BROKEN
