@@ -1,0 +1,5 @@
+# Shell scripts and workflow files must keep LF endings: CRLF breaks bash on Linux.
+*.sh text eol=lf
+*.yml text eol=lf
+Dockerfile text eol=lf
+*.py text eol=lf
