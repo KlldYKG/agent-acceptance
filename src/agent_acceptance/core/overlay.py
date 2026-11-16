@@ -32,14 +32,21 @@ class GitError(RuntimeError):
     """A git command failed while preparing the overlay runs."""
 
 
+class PytestRunnerError(RuntimeError):
+    """pytest could not run at all (infrastructure problem, not test data).
+
+    A pytest process that *starts* always produces JUnit XML — even when every
+    test fails or the collection explodes. Missing/empty XML therefore means
+    the interpreter never got off the ground (bad path, wrong cwd, import
+    crash before the plugin hook); that must surface loudly, not degrade into
+    a silent ERROR verdict with zero diagnostics.
+    """
+
+
 def _git(repo: Path, *args: str) -> str:
-    proc = subprocess.run(
-        ["git", "-C", str(repo), *args], capture_output=True, text=True
-    )
+    proc = subprocess.run(["git", "-C", str(repo), *args], capture_output=True, text=True)
     if proc.returncode != 0:
-        raise GitError(
-            f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}"
-        )
+        raise GitError(f"git {' '.join(args)} failed: {proc.stderr.strip() or proc.stdout.strip()}")
     return proc.stdout
 
 
@@ -56,10 +63,7 @@ def is_test_file(path: str, test_dirs: list[str]) -> bool:
     name = PurePosixPath(path).name
     if not (name.startswith("test_") or name.endswith("_test.py")):
         return False
-    return any(
-        path == d.rstrip("/") or path.startswith(d.rstrip("/") + "/")
-        for d in test_dirs
-    )
+    return any(path == d.rstrip("/") or path.startswith(d.rstrip("/") + "/") for d in test_dirs)
 
 
 @dataclass
@@ -68,9 +72,7 @@ class Changes:
     srcs: list[str]
 
 
-def classify_changes(
-    repo: Path, base: str, head: str, test_dirs: list[str]
-) -> Changes:
+def classify_changes(repo: Path, base: str, head: str, test_dirs: list[str]) -> Changes:
     """Split changed files into test files and other Python source files."""
     tests: list[str] = []
     srcs: list[str] = []
@@ -108,16 +110,38 @@ def run_pytest(
     python_exe: str = sys.executable,
 ) -> subprocess.CompletedProcess[str]:
     """Run the changed tests inside *tree*; a failing run is data, not an error."""
+    # Resolve the interpreter against the invoker's cwd *before* the child
+    # switches its own cwd to the worktree. A relative --python path used to
+    # evaporate here (G11): pytest silently never ran and the run degraded
+    # into an ERROR verdict with no diagnostics.
+    exe = str(Path(python_exe).resolve())
     cmd = [
-        python_exe, "-m", "pytest", "-p", "no:cacheprovider", "-q",
+        exe,
+        "-m",
+        "pytest",
+        "-p",
+        "no:cacheprovider",
+        "-q",
         f"--junitxml={junit_xml}",
         *test_paths,
     ]
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
-    return subprocess.run(
-        cmd, cwd=str(tree), env=env, capture_output=True, text=True, check=False
-    )
+    try:
+        proc = subprocess.run(
+            cmd, cwd=str(tree), env=env, capture_output=True, text=True, check=False
+        )
+    except OSError as exc:
+        raise PytestRunnerError(f"cannot launch pytest interpreter {exe}: {exc}") from exc
+    if not junit_xml.exists() or junit_xml.stat().st_size == 0:
+        tail = (proc.stderr or proc.stdout or "").strip()
+        tail = tail[-600:] if tail else "(pytest produced no output)"
+        raise PytestRunnerError(
+            f"pytest wrote no JUnit XML for the {tree.name} tree "
+            f"(interpreter: {exe}); it likely failed to start or import. "
+            f"output tail: {tail}"
+        )
+    return proc
 
 
 def _write_synthetic_junit(path: Path, outcomes: dict[str, str]) -> None:
@@ -216,9 +240,7 @@ def run_overlay(
     try:
         # Worktrees must live OUTSIDE the repository working tree (git refuses
         # nested worktrees), so the default root is a fresh temp directory.
-        root = work_root if work_root is not None else Path(
-            tempfile.mkdtemp(prefix="aa-overlay-")
-        )
+        root = work_root if work_root is not None else Path(tempfile.mkdtemp(prefix="aa-overlay-"))
         if work_root is None:
             tmp_work = str(root)
         base_tree = add_worktree(repo, base, root / "base-tree")
@@ -249,5 +271,6 @@ def run_overlay(
 
     ev = evaluate(out_dir, base, head, mut_status=mut_status)
     (out_dir / "evidence.json").write_text(ev.to_json(), encoding="utf-8")
-    return RunOutcome(changes=changes, base_xml=out_dir / "base.xml",
-                      pr_xml=out_dir / "pr.xml", evidence=ev)
+    return RunOutcome(
+        changes=changes, base_xml=out_dir / "base.xml", pr_xml=out_dir / "pr.xml", evidence=ev
+    )

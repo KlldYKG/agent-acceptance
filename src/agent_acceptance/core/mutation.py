@@ -73,13 +73,14 @@ def run_mutation(
     if not changes.srcs:
         return MutationOutcome(result=MutationResult(status="SKIPPED"))
 
+    # Same relative-path trap as overlay.run_pytest (G11): the child cwd is a
+    # worktree, so resolve the interpreter against the invoker's cwd up front.
+    python_exe = str(Path(python_exe).resolve())
     repo = Path(repo).resolve()
     mut_tree: Path | None = None
     tmp_work = None
     try:
-        root = work_root if work_root is not None else Path(
-            tempfile.mkdtemp(prefix="aa-mutation-")
-        )
+        root = work_root if work_root is not None else Path(tempfile.mkdtemp(prefix="aa-mutation-"))
         if work_root is None:
             tmp_work = str(root)
         mut_tree = add_worktree(repo, head, root / "mut-tree")
@@ -88,8 +89,11 @@ def run_mutation(
         try:
             subprocess.run(
                 [python_exe, "-m", "mutmut", "run"],
-                cwd=str(mut_tree), capture_output=True, text=True,
-                timeout=budget_s, check=False,
+                cwd=str(mut_tree),
+                capture_output=True,
+                text=True,
+                timeout=budget_s,
+                check=False,
             )
         except subprocess.TimeoutExpired:
             return MutationOutcome(result=MutationResult(status="TIMEOUT"))
@@ -99,8 +103,11 @@ def run_mutation(
 
         junit = subprocess.run(
             [python_exe, "-m", "mutmut", "junitxml"],
-            cwd=str(mut_tree), capture_output=True, text=True,
-            timeout=JUNIT_TIMEOUT_S, check=False,
+            cwd=str(mut_tree),
+            capture_output=True,
+            text=True,
+            timeout=JUNIT_TIMEOUT_S,
+            check=False,
         )
         if junit.returncode != 0 or not junit.stdout.strip():
             return MutationOutcome(result=MutationResult(status="SKIPPED"))

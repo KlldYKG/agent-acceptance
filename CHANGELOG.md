@@ -5,6 +5,20 @@ The format follows [Keep a Changelog](https://keepachangelog.com/); versioning
 follows [SemVer](https://semver.org/). Policy and protocol semantics follow
 `protocol/SPEC.md` v2 (frozen) in the project workspace.
 
+## [Unreleased]
+
+### Fixed
+
+- **Loud failure for a dead pytest interpreter (G11).** A relative `--python`
+  path used to evaporate after the child process switched its working
+  directory to the worktree: pytest silently never ran and the whole run
+  degraded into an `ERROR` verdict with zero diagnostics. The interpreter is
+  now resolved to an absolute path up front (both the overlay backend and the
+  mutation backend), and a run that produces no JUnit XML at all raises a
+  `PytestRunnerError` carrying the captured output tail — pytest that *starts*
+  always writes JUnit XML, so missing XML is an infrastructure failure and
+  must be reported as one.
+
 ## [1.0.0] — 2026-11-16
 
 First stable release. The validated execution path (GitHub Action, Docker

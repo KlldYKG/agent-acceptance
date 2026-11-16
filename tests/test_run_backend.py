@@ -15,9 +15,11 @@ import pytest
 from agent_acceptance import exit_codes as xc
 from agent_acceptance.cli import main
 from agent_acceptance.core.overlay import (
+    PytestRunnerError,
     classify_changes,
     is_test_file,
     run_overlay,
+    run_pytest,
 )
 
 SRC_BASE = "def add(a, b):\n    return a - b\n"  # bug: subtracts
@@ -59,6 +61,7 @@ def demo_repo(tmp_path: Path) -> Path:
 
 # ---------------------------------------------------------------- unit level
 
+
 def test_is_test_file_matrix() -> None:
     dirs = ["tests", "src/tests"]
     assert is_test_file("tests/test_a.py", dirs)
@@ -75,7 +78,29 @@ def test_classify_changes(demo_repo: Path) -> None:
     assert changes.srcs == ["src/add.py"]
 
 
+# ------------------------------------------------------- runner diagnostics
+
+
+def test_run_pytest_relative_interpreter(demo_repo: Path, tmp_path: Path) -> None:
+    """G11 regression: a relative --python path must survive the cwd switch."""
+    import os
+    import sys
+
+    rel_exe = os.path.relpath(sys.executable, os.getcwd())
+    xml = tmp_path / "rel.xml"
+    run_pytest(demo_repo, ["tests/test_other.py"], xml, python_exe=rel_exe)
+    assert xml.exists() and xml.stat().st_size > 0
+
+
+def test_run_pytest_bad_interpreter_raises(tmp_path: Path) -> None:
+    """G11 regression: a dead interpreter must fail loudly, not silently."""
+    xml = tmp_path / "out.xml"
+    with pytest.raises(PytestRunnerError, match="cannot launch pytest interpreter"):
+        run_pytest(tmp_path, ["tests/test_x.py"], xml, python_exe=str(tmp_path / "no-such-python"))
+
+
 # --------------------------------------------------------------- end to end
+
 
 def test_run_overlay_valid(demo_repo: Path, tmp_path: Path) -> None:
     out = tmp_path / "out"
@@ -135,26 +160,39 @@ def test_run_overlay_prepass(tmp_path: Path) -> None:
 
 # ------------------------------------------------------------------ CLI
 
+
 def test_cli_run_subcommand(demo_repo: Path, tmp_path: Path) -> None:
     out = tmp_path / "cli-out"
-    rc = main([
-        "run",
-        "--repo", str(demo_repo),
-        "--base", "main",
-        "--head", "fix",
-        "--out", str(out),
-    ])
+    rc = main(
+        [
+            "run",
+            "--repo",
+            str(demo_repo),
+            "--base",
+            "main",
+            "--head",
+            "fix",
+            "--out",
+            str(out),
+        ]
+    )
     assert rc == xc.OK
     assert (out / "evidence.json").exists()
     assert "EVIDENCE_OK" in (out / "evidence.json").read_text()
 
 
 def test_cli_run_bad_revision(demo_repo: Path, tmp_path: Path) -> None:
-    rc = main([
-        "run",
-        "--repo", str(demo_repo),
-        "--base", "no-such-ref",
-        "--head", "fix",
-        "--out", str(tmp_path / "out"),
-    ])
+    rc = main(
+        [
+            "run",
+            "--repo",
+            str(demo_repo),
+            "--base",
+            "no-such-ref",
+            "--head",
+            "fix",
+            "--out",
+            str(tmp_path / "out"),
+        ]
+    )
     assert rc == xc.USAGE
