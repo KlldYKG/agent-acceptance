@@ -2,10 +2,10 @@
 
 import json
 
+from agent_acceptance import exit_codes as xc
 from agent_acceptance.cli import main
 from agent_acceptance.core.evaluate import Evidence, MutationResult, TestRow
 from agent_acceptance.report.render import MARKER, render
-from agent_acceptance import exit_codes as xc
 
 
 def _ev(strength="STRONG", verdict="EVIDENCE_OK", mut=None):

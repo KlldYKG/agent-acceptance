@@ -1,5 +1,7 @@
 """Tests for the bidirectional-validity classifier and mutation parsing."""
 
+from pathlib import Path
+
 import pytest
 
 from agent_acceptance.core.evaluate import (
@@ -10,8 +12,6 @@ from agent_acceptance.core.evaluate import (
     parse_junit,
     parse_mutation,
 )
-from pathlib import Path
-import textwrap
 
 
 # ---------------------------------------------------------------- classify_pair

@@ -189,7 +189,8 @@ def evaluate(
     mut = parse_mutation(out_dir / "mutation.xml", forced_status=forced_mut)
 
     if not base or not pr:
-        strength, verdict, rows = "NONE", "ERROR", []
+        strength, verdict = "NONE", "ERROR"
+        rows: list = []
     else:
         strength, verdict, rows = classify_run(base, pr, mut)
 
