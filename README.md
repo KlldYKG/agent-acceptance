@@ -126,9 +126,10 @@ evidence*, they verify *policy compliance*.
 
 ## Status
 
-🚧 Developer preview (`0.1.0.dev0` on
-[TestPyPI](https://test.pypi.org/project/agent-acceptance/)). API may change
-before `v1.0.0`.
+**v1.0.0** — first stable release. Install from
+[PyPI](https://pypi.org/project/agent-acceptance/) or use the action
+(pinned by commit SHA, see the quick start above). See
+[CHANGELOG.md](CHANGELOG.md) for the release notes.
 
 ## Contributing & license
 
