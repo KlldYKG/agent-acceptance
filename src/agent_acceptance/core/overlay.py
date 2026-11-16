@@ -21,10 +21,11 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
-from agent_acceptance.core.evaluate import Evidence, evaluate
+from agent_acceptance.core.evaluate import Evidence, evaluate, parse_junit
 
 
 class GitError(RuntimeError):
@@ -119,6 +120,56 @@ def run_pytest(
     )
 
 
+def _write_synthetic_junit(path: Path, outcomes: dict[str, str]) -> None:
+    """Serialise merged per-test outcomes back to JUnit XML (flaky repeats)."""
+    suite = ET.Element("testsuite", tests=str(len(outcomes)))
+    for key in sorted(outcomes):
+        classname, _, name = key.partition("::")
+        case = ET.SubElement(suite, "testcase", classname=classname, name=name)
+        outcome = outcomes[key]
+        if outcome == "failed":
+            ET.SubElement(case, "failure", message="failed")
+        elif outcome == "error":
+            ET.SubElement(case, "error", message="unstable across repeats")
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=False)
+
+
+def run_phase_repeat(
+    tree: Path,
+    test_paths: list[str],
+    out_dir: Path,
+    name: str,
+    repeats: int,
+    python_exe: str = sys.executable,
+) -> dict[str, str]:
+    """Run one phase up to *repeats* times (SPEC §2.5 flaky handling).
+
+    With ``repeats == 1`` this is a single plain run. With ``repeats > 1``
+    (gate-mode extension, ``flaky-n`` config), every test must show the same
+    outcome in every run; an unstable test maps to ``error`` — flakiness is
+    never evidence.
+    """
+    runs: list[dict[str, str]] = []
+    canonical = out_dir / f"{name}.xml"
+    for i in range(max(1, repeats)):
+        xml = out_dir / f"{name}.{i}.xml" if repeats > 1 else canonical
+        run_pytest(tree, test_paths, xml, python_exe)
+        runs.append(parse_junit(xml))
+
+    if repeats <= 1:
+        return runs[0]
+
+    merged: dict[str, str] = {}
+    keys: set[str] = set()
+    for r in runs:
+        keys.update(r)
+    for key in keys:
+        outcomes = {r.get(key, "missing") for r in runs}
+        merged[key] = outcomes.pop() if len(outcomes) == 1 else "error"
+    _write_synthetic_junit(canonical, merged)
+    return merged
+
+
 @dataclass
 class RunOutcome:
     """Result of one overlay orchestration."""
@@ -137,13 +188,18 @@ def run_overlay(
     test_dirs: list[str] | None = None,
     python_exe: str = sys.executable,
     work_root: Path | None = None,
-    mut_status: str | None = "SKIPPED",
+    flaky_n: int = 1,
+    mutation_budget_s: int = 0,
 ) -> RunOutcome | None:
-    """Orchestrate the double run and evaluate.
+    """Orchestrate the double run (+ optional mutation phase) and evaluate.
 
     Returns None when the PR changes no test files (nothing to verify — the
-    caller renders the NO_EVIDENCE report). Mutation runs belong to the
-    mutation backend (G3); until it lands the phase is reported SKIPPED.
+    caller renders the NO_EVIDENCE report).
+
+    ``flaky_n``: repeats per phase; >1 engages the gate-mode flaky rule
+    (unstable tests count as ``error``). ``mutation_budget_s``: 0 skips the
+    mutation phase entirely; otherwise SPEC §3 budget semantics apply and a
+    budget overrun degrades to TIMEOUT/SKIPPED (never a fabricated score).
     """
     repo = Path(repo).resolve()
     out_dir = Path(out_dir)
@@ -170,10 +226,8 @@ def run_overlay(
         # New tests against the OLD source (fail-before).
         overlay_files(head_tree, base_tree, changes.tests)
 
-        base_xml = out_dir / "base.xml"
-        pr_xml = out_dir / "pr.xml"
-        run_pytest(base_tree, changes.tests, base_xml, python_exe)
-        run_pytest(head_tree, changes.tests, pr_xml, python_exe)
+        run_phase_repeat(base_tree, changes.tests, out_dir, "base", flaky_n, python_exe)
+        run_phase_repeat(head_tree, changes.tests, out_dir, "pr", flaky_n, python_exe)
     finally:
         for tree in (base_tree, head_tree):
             if tree is not None:
@@ -184,6 +238,16 @@ def run_overlay(
         if tmp_work is not None:
             shutil.rmtree(tmp_work, ignore_errors=True)
 
+    mut_status = "SKIPPED"
+    if mutation_budget_s > 0 and changes.srcs:
+        from agent_acceptance.core.mutation import run_mutation
+
+        outcome = run_mutation(
+            repo, head, changes, out_dir, mutation_budget_s, python_exe, work_root
+        )
+        mut_status = outcome.result.status
+
     ev = evaluate(out_dir, base, head, mut_status=mut_status)
     (out_dir / "evidence.json").write_text(ev.to_json())
-    return RunOutcome(changes=changes, base_xml=base_xml, pr_xml=pr_xml, evidence=ev)
+    return RunOutcome(changes=changes, base_xml=out_dir / "base.xml",
+                      pr_xml=out_dir / "pr.xml", evidence=ev)

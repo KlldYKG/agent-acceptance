@@ -23,20 +23,40 @@ from agent_acceptance.report.render import render
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
+    from agent_acceptance.config import ConfigError, load_config
     from agent_acceptance.core.overlay import run_overlay
 
     repo = Path(args.repo).resolve()
     out_dir = Path(args.out)
-    test_dirs = [d for d in args.test_dirs.split(",") if d.strip()]
+
+    try:
+        cfg = load_config(repo, args.base)
+    except ConfigError as exc:
+        print(f"error: bad .agent-acceptance.yml on base: {exc}", file=sys.stderr)
+        return xc.USAGE
+    except Exception as exc:  # bad ref etc.
+        print(f"error: {exc}", file=sys.stderr)
+        return xc.USAGE
+
+    # CLI flags override the base policy where given.
+    test_dirs = (
+        [d for d in args.test_dirs.split(",") if d.strip()]
+        if args.test_dirs is not None else cfg.test_dirs
+    )
+    budget = args.mutation_budget if args.mutation_budget is not None \
+        else cfg.mutation_budget_seconds
+    flaky_n = args.flaky_n if args.flaky_n is not None else cfg.flaky_n
+    gate = args.gate_flag if args.gate_flag is not None else cfg.gate
+    # SPEC §2.5: flaky repeats are a gate-mode-only extension; report mode
+    # always runs each side once.
+    if not (gate and not args.report_only):
+        flaky_n = 1
 
     try:
         outcome = run_overlay(
-            repo,
-            args.base,
-            args.head,
-            out_dir,
-            test_dirs=test_dirs,
-            python_exe=args.python,
+            repo, args.base, args.head, out_dir,
+            test_dirs=test_dirs, python_exe=args.python,
+            flaky_n=flaky_n, mutation_budget_s=budget,
         )
     except Exception as exc:  # noqa: BLE001 — surface as usage/infra error
         print(f"error: {exc}", file=sys.stderr)
@@ -54,6 +74,12 @@ def _cmd_run(args: argparse.Namespace) -> int:
     ev = outcome.evidence
     print(f"strength={ev.strength} verdict={ev.verdict}")
     print(f"evidence: {out_dir / 'evidence.json'}")
+
+    if gate and not args.report_only:
+        if ev.verdict == "INVALID_EVIDENCE":
+            return xc.GATE_INVALID_EVIDENCE
+        if any(t.verdict == "BROKEN" for t in ev.tests):
+            return xc.GATE_BROKEN
     return xc.OK
 
 
@@ -122,10 +148,23 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--base", required=True, help="base revision (SHA/branch/tag)")
     rn.add_argument("--head", required=True, help="PR revision (SHA/branch/tag)")
     rn.add_argument("--out", default="out", help="output directory for XML/evidence")
-    rn.add_argument("--test-dirs", default="tests",
-                    help="comma-separated test directories (default: tests)")
+    rn.add_argument("--test-dirs", default=None,
+                    help="comma-separated test dirs (default: policy on base)")
     rn.add_argument("--python", default=sys.executable,
-                    help="python interpreter used to run pytest inside the trees")
+                    help="python interpreter used to run pytest/mutmut")
+    rn.add_argument("--mutation-budget", type=int, default=None, metavar="S",
+                    help="mutation time budget in seconds (default: policy on "
+                         "base, 600); 0 disables the mutation phase")
+    rn.add_argument("--flaky-n", type=int, default=None, metavar="N",
+                    help="runs per phase; >1 enables the flaky rule "
+                         "(default: policy on base, 3; report mode may use 1)")
+    rn.add_argument("--gate", dest="gate_flag", action="store_true", default=None,
+                    help="gate mode: exit non-zero on invalid evidence "
+                         "(default: policy on base, off)")
+    rn.add_argument("--no-gate", dest="gate_flag", action="store_false",
+                    help="force report mode regardless of policy")
+    rn.add_argument("--report-only", action="store_true",
+                    help="never convert findings into a non-zero exit code")
     rn.set_defaults(func=_cmd_run)
     return p
 
