@@ -82,6 +82,8 @@ def test_load_config_bad_ref_raises(tmp_path: Path) -> None:
     repo = tmp_path / "r"
     repo.mkdir()
     _git(repo, "init", "-q", "-b", "main")
+    _git(repo, "config", "user.email", "t@example.com")
+    _git(repo, "config", "user.name", "t")
     _git(repo, "commit", "-qm", "base", "--allow-empty")
     with pytest.raises(GitError):
         load_config(repo, "no-such-ref")
