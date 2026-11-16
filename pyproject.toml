@@ -1,0 +1,54 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agent-acceptance"
+version = "0.1.0.dev0"
+description = "Deterministic test-evidence checks for AI-contributed PRs: verify added tests fail before and pass after the change. Report mode never blocks."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+authors = [{ name = "agent-acceptance contributors" }]
+keywords = ["testing", "ci", "github-actions", "mutation-testing", "ai-generated-code"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Intended Audience :: Developers",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Software Development :: Quality Assurance",
+  "Topic :: Software Development :: Testing",
+]
+dependencies = []
+
+[project.optional-dependencies]
+# The GitHub Action backend shells out to docker/mutmut; the CLI core is stdlib-only.
+action = []
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+agent-acceptance = "agent_acceptance.cli:main"
+
+[project.urls]
+Repository = "https://github.com/KlldYKG/agent-acceptance"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_acceptance"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.coverage.run]
+source = ["agent_acceptance"]
