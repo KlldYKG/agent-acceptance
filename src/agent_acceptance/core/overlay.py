@@ -248,6 +248,6 @@ def run_overlay(
         mut_status = outcome.result.status
 
     ev = evaluate(out_dir, base, head, mut_status=mut_status)
-    (out_dir / "evidence.json").write_text(ev.to_json())
+    (out_dir / "evidence.json").write_text(ev.to_json(), encoding="utf-8")
     return RunOutcome(changes=changes, base_xml=out_dir / "base.xml",
                       pr_xml=out_dir / "pr.xml", evidence=ev)

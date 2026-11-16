@@ -46,7 +46,7 @@ def write_mutmut_config(tree: Path, test_paths: list[str], src_paths: list[str])
         f"paths_to_mutate={','.join(src_paths)}\n"
     )
     try:
-        text = cfg_path.read_text()
+        text = cfg_path.read_text(encoding="utf-8")
     except FileNotFoundError:
         text = ""
 
@@ -55,7 +55,7 @@ def write_mutmut_config(tree: Path, test_paths: list[str], src_paths: list[str])
         text = head
     elif text and not text.endswith("\n"):
         text += "\n"
-    cfg_path.write_text(text + section)
+    cfg_path.write_text(text + section, encoding="utf-8")
     return cfg_path
 
 
@@ -105,7 +105,7 @@ def run_mutation(
         if junit.returncode != 0 or not junit.stdout.strip():
             return MutationOutcome(result=MutationResult(status="SKIPPED"))
         xml_path = out_dir / "mutation.xml"
-        xml_path.write_text(junit.stdout)
+        xml_path.write_text(junit.stdout, encoding="utf-8")
         return MutationOutcome(result=parse_mutation(xml_path), xml_path=xml_path)
     finally:
         if mut_tree is not None:

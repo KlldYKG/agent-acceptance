@@ -66,7 +66,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         (out_dir / "report.md").write_text(
             "# Test-evidence assessment\n\n"
             "No test files were changed in this PR, so there is no executable "
-            "test evidence to verify.\n"
+            "test evidence to verify.\n",
+            encoding="utf-8",
         )
         print("verdict=NO_EVIDENCE (no changed test files)")
         return xc.OK
@@ -89,7 +90,7 @@ def _cmd_evaluate(args: argparse.Namespace) -> int:
         Path(args.out_dir), args.base_sha, args.head_sha,
         mut_status=args.mutation_status,
     )
-    (Path(args.out_dir) / "evidence.json").write_text(ev.to_json())
+    (Path(args.out_dir) / "evidence.json").write_text(ev.to_json(), encoding="utf-8")
     print(f"strength={ev.strength} verdict={ev.verdict}")
     return xc.OK
 
@@ -99,7 +100,7 @@ def _cmd_report(args: argparse.Namespace) -> int:
     ev = evaluate(out, args.base_sha, args.head_sha,
                   mut_status=args.mutation_status) \
         if not (out / "evidence.json").exists() else _load_evidence(out)
-    (out / "report.md").write_text(render(ev))
+    (out / "report.md").write_text(render(ev), encoding="utf-8")
     print(f"wrote {out / 'report.md'}")
     return xc.OK
 
@@ -109,7 +110,7 @@ def _load_evidence(out: Path):
 
     from agent_acceptance.core.evaluate import Evidence, MutationResult, TestRow
 
-    doc = json.loads((out / "evidence.json").read_text())
+    doc = json.loads((out / "evidence.json").read_text(encoding="utf-8"))
     return Evidence(
         base_sha=doc["base_sha"],
         head_sha=doc["head_sha"],
