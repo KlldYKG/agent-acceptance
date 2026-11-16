@@ -2,6 +2,8 @@
 
 import json
 
+import pytest
+
 from agent_acceptance import exit_codes as xc
 from agent_acceptance.cli import main
 from agent_acceptance.core.evaluate import Evidence, MutationResult, TestRow
@@ -79,7 +81,8 @@ def test_cli_report_reads_existing_evidence(tmp_path):
     assert (tmp_path / "report.md").read_text().startswith(MARKER)
 
 
-def test_cli_run_not_implemented_exit_2(capsys):
-    rc = main(["run"])
-    assert rc == xc.USAGE
-    assert "not implemented" in capsys.readouterr().err
+def test_cli_run_requires_base_head(capsys):
+    """`run` is implemented (worktree backend); bare invocation is a usage error."""
+    with pytest.raises(SystemExit):
+        main(["run"])
+    assert "required" in capsys.readouterr().err

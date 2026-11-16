@@ -1,9 +1,9 @@
 """agent-acceptance CLI.
 
 Subcommands (v1.0 scope, P1_CONSOLIDATION_PLAN output 2):
+  run       Orchestrate base/PR overlay runs locally (git worktree backend).
   evaluate  Parse JUnit XML results and write evidence.json.
   report    Render the deterministic PR-comment Markdown from evidence.
-  run       (planned) orchestrate overlay runs locally via git worktree.
 
 Exit codes: see agent_acceptance.exit_codes.
 Policy/config is loaded ONLY from the base branch of the target repository —
@@ -20,6 +20,41 @@ from agent_acceptance import __version__
 from agent_acceptance import exit_codes as xc
 from agent_acceptance.core.evaluate import evaluate
 from agent_acceptance.report.render import render
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    from agent_acceptance.core.overlay import run_overlay
+
+    repo = Path(args.repo).resolve()
+    out_dir = Path(args.out)
+    test_dirs = [d for d in args.test_dirs.split(",") if d.strip()]
+
+    try:
+        outcome = run_overlay(
+            repo,
+            args.base,
+            args.head,
+            out_dir,
+            test_dirs=test_dirs,
+            python_exe=args.python,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as usage/infra error
+        print(f"error: {exc}", file=sys.stderr)
+        return xc.USAGE
+
+    if outcome is None:
+        (out_dir / "report.md").write_text(
+            "# Test-evidence assessment\n\n"
+            "No test files were changed in this PR, so there is no executable "
+            "test evidence to verify.\n"
+        )
+        print("verdict=NO_EVIDENCE (no changed test files)")
+        return xc.OK
+
+    ev = outcome.evidence
+    print(f"strength={ev.strength} verdict={ev.verdict}")
+    print(f"evidence: {out_dir / 'evidence.json'}")
+    return xc.OK
 
 
 def _cmd_evaluate(args: argparse.Namespace) -> int:
@@ -62,15 +97,6 @@ def _load_evidence(out: Path):
     )
 
 
-def _cmd_run(_args: argparse.Namespace) -> int:
-    print(
-        "error: `run` (local worktree orchestration) is not implemented in this "
-        "developer preview; use the GitHub Action, which is the validated path.",
-        file=sys.stderr,
-    )
-    return xc.USAGE
-
-
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="agent-acceptance", description=__doc__)
     p.add_argument("--version", action="version", version=__version__)
@@ -91,7 +117,15 @@ def build_parser() -> argparse.ArgumentParser:
     rp.add_argument("--mutation-status", default=None)
     rp.set_defaults(func=_cmd_report)
 
-    rn = sub.add_parser("run", help="orchestrate overlay runs locally (planned)")
+    rn = sub.add_parser("run", help="orchestrate base/PR overlay runs locally")
+    rn.add_argument("--repo", default=".", help="path to the target git repository")
+    rn.add_argument("--base", required=True, help="base revision (SHA/branch/tag)")
+    rn.add_argument("--head", required=True, help="PR revision (SHA/branch/tag)")
+    rn.add_argument("--out", default="out", help="output directory for XML/evidence")
+    rn.add_argument("--test-dirs", default="tests",
+                    help="comma-separated test directories (default: tests)")
+    rn.add_argument("--python", default=sys.executable,
+                    help="python interpreter used to run pytest inside the trees")
     rn.set_defaults(func=_cmd_run)
     return p
 
