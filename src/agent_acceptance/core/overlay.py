@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -103,11 +104,50 @@ def overlay_files(src_tree: Path, dest_tree: Path, rel_paths: list[str]) -> None
         shutil.copy2(src, dest)
 
 
+class PhaseTimeout(RuntimeError):
+    """A phase exceeded its wall-clock budget (e.g. a hang/deadloop test).
+
+    This is *data about the run*, not an infrastructure crash: the phase is
+    recorded as a synthetic errored testcase so the verdict degrades to
+    ERROR instead of the gate hanging forever inside CI.
+    """
+
+
+def _kill_process_group(proc: subprocess.Popen) -> None:
+    """Kill *proc* and (on POSIX) its whole process group.
+
+    pytest spawns children (xdist workers, plugin subprocesses); killing only
+    the direct child leaks them (observed: an orphaned pytest surviving an
+    outer harness kill for over an hour).
+    """
+    if os.name == "posix":
+        try:
+            os.killpg(proc.pid, signal.SIGKILL)
+            return
+        except ProcessLookupError:
+            pass
+    proc.kill()
+
+
+def _write_phase_timeout_junit(path: Path) -> None:
+    """Write a one-case JUnit XML marking the phase as timed out.
+
+    ``parse_junit`` turns the ``<error>`` child into outcome ``error``, which
+    ``classify_run`` aggregates into an ERROR/NONE verdict — an honest
+    "could not verify" instead of a fabricated pass.
+    """
+    suite = ET.Element("testsuite", tests="1")
+    case = ET.SubElement(suite, "testcase", classname="__gate__", name="phase_timeout")
+    ET.SubElement(case, "error", message="phase exceeded the wall-clock timeout")
+    ET.ElementTree(suite).write(path, encoding="utf-8", xml_declaration=False)
+
+
 def run_pytest(
     tree: Path,
     test_paths: list[str],
     junit_xml: Path,
     python_exe: str = sys.executable,
+    timeout_s: int = 0,
 ) -> subprocess.CompletedProcess[str]:
     """Run the changed tests inside *tree*; a failing run is data, not an error."""
     # Resolve the interpreter against the invoker's cwd *before* the child
@@ -127,21 +167,50 @@ def run_pytest(
     ]
     env = dict(os.environ)
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    # A stale JUnit file from a previous invocation must not mask a timeout.
+    if junit_xml.exists():
+        junit_xml.unlink()
+    # start_new_session detaches the child into its own process group so a
+    # timeout can kill the entire tree (pytest + workers), not just the shell.
     try:
-        proc = subprocess.run(
-            cmd, cwd=str(tree), env=env, capture_output=True, text=True, check=False
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(tree),
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            start_new_session=(os.name == "posix"),
         )
     except OSError as exc:
         raise PytestRunnerError(f"cannot launch pytest interpreter {exe}: {exc}") from exc
+    timed_out = False
+    try:
+        out, _ = proc.communicate(timeout=timeout_s or None)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        _kill_process_group(proc)
+        try:
+            out, _ = proc.communicate(timeout=30)
+        except subprocess.TimeoutExpired:
+            out = ""
+    if timed_out:
+        # A killed pytest leaves no (or a truncated) JUnit file — record the
+        # timeout explicitly rather than misreporting it as "failed to start".
+        _write_phase_timeout_junit(junit_xml)
+        raise PhaseTimeout(
+            f"pytest phase on {tree.name} exceeded {timeout_s}s wall clock; "
+            f"process group terminated. output tail: {(out or '')[-600:]}"
+        )
     if not junit_xml.exists() or junit_xml.stat().st_size == 0:
-        tail = (proc.stderr or proc.stdout or "").strip()
+        tail = (out or "").strip()
         tail = tail[-600:] if tail else "(pytest produced no output)"
         raise PytestRunnerError(
             f"pytest wrote no JUnit XML for the {tree.name} tree "
             f"(interpreter: {exe}); it likely failed to start or import. "
             f"output tail: {tail}"
         )
-    return proc
+    return subprocess.CompletedProcess(cmd, proc.returncode, out, "")
 
 
 def _write_synthetic_junit(path: Path, outcomes: dict[str, str]) -> None:
@@ -165,19 +234,26 @@ def run_phase_repeat(
     name: str,
     repeats: int,
     python_exe: str = sys.executable,
+    timeout_s: int = 0,
 ) -> dict[str, str]:
     """Run one phase up to *repeats* times (SPEC §2.5 flaky handling).
 
     With ``repeats == 1`` this is a single plain run. With ``repeats > 1``
     (gate-mode extension, ``flaky-n`` config), every test must show the same
     outcome in every run; an unstable test maps to ``error`` — flakiness is
-    never evidence.
+    never evidence. ``timeout_s`` bounds each pytest invocation; 0 disables
+    the wall-clock limit.
     """
     runs: list[dict[str, str]] = []
     canonical = out_dir / f"{name}.xml"
     for i in range(max(1, repeats)):
         xml = out_dir / f"{name}.{i}.xml" if repeats > 1 else canonical
-        run_pytest(tree, test_paths, xml, python_exe)
+        try:
+            run_pytest(tree, test_paths, xml, python_exe, timeout_s=timeout_s)
+        except PhaseTimeout:
+            # A phase that hangs once will hang again; the synthetic marker
+            # case carries the timeout into evaluation and degrades the run.
+            return parse_junit(xml)
         runs.append(parse_junit(xml))
 
     if repeats <= 1:
@@ -214,6 +290,7 @@ def run_overlay(
     work_root: Path | None = None,
     flaky_n: int = 1,
     mutation_budget_s: int = 0,
+    phase_timeout_s: int = 0,
 ) -> RunOutcome | None:
     """Orchestrate the double run (+ optional mutation phase) and evaluate.
 
@@ -224,6 +301,9 @@ def run_overlay(
     (unstable tests count as ``error``). ``mutation_budget_s``: 0 skips the
     mutation phase entirely; otherwise SPEC §3 budget semantics apply and a
     budget overrun degrades to TIMEOUT/SKIPPED (never a fabricated score).
+    ``phase_timeout_s``: wall-clock limit per pytest phase; a phase that
+    exceeds it is recorded as an errored marker case (verdict degrades to
+    ERROR) instead of the gate hanging forever.
     """
     repo = Path(repo).resolve()
     out_dir = Path(out_dir)
@@ -248,8 +328,10 @@ def run_overlay(
         # New tests against the OLD source (fail-before).
         overlay_files(head_tree, base_tree, changes.tests)
 
-        run_phase_repeat(base_tree, changes.tests, out_dir, "base", flaky_n, python_exe)
-        run_phase_repeat(head_tree, changes.tests, out_dir, "pr", flaky_n, python_exe)
+        run_phase_repeat(base_tree, changes.tests, out_dir, "base", flaky_n,
+                         python_exe, timeout_s=phase_timeout_s)
+        run_phase_repeat(head_tree, changes.tests, out_dir, "pr", flaky_n,
+                         python_exe, timeout_s=phase_timeout_s)
     finally:
         for tree in (base_tree, head_tree):
             if tree is not None:

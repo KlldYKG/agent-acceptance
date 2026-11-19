@@ -5,10 +5,36 @@ The format follows [Keep a Changelog](https://keepachangelog.com/); versioning
 follows [SemVer](https://semver.org/). Policy and protocol semantics follow
 `protocol/SPEC.md` v2 (frozen) in the project workspace.
 
-## [Unreleased]
+## [1.0.1] — 2026-11-19
+
+Hardening release driven by adversarial validation (V-round) and the RQ3
+ablation experiments. No protocol semantics change; all fixes are in the
+execution/degradation layer.
+
+### Added
+
+- **`--phase-timeout` (default 900 s).** Each pytest phase (base / PR) now runs
+  under a per-phase wall-clock budget. A hanging test (e.g. an infinite loop
+  planted in an adversarial PR) previously blocked the gate forever and leaked
+  the pytest grandchild process; the phase now writes a synthetic
+  `__gate__::phase_timeout` error case and the verdict degrades honestly to
+  `ERROR`/`NONE` instead of fabricating an outcome.
 
 ### Fixed
 
+- **Mutation backend: venv symlink escape.** `run_mutation` resolved the
+  interpreter with `Path.resolve()`, which followed the venv `bin/python`
+  symlink back to the system interpreter — where `mutmut` (and the target
+  deps) are not installed. The backend silently produced zero mutants. It now
+  uses `abspath` (no symlink following), matching the intent of the G11 fix
+  while avoiding the resolve() trap. The mutmut `runner=` config also
+  interpolates the interpreter by absolute path instead of a bare `python`,
+  whose PATH-dependent resolution silently ran the baseline in the wrong
+  environment.
+- **Mutation backend: zero-mutant XML is SKIPPED, not OK/null.** When mutmut
+  completes but measures zero mutants (typically because the baseline test
+  run failed — e.g. broken PR tests abort the mutation baseline), the phase
+  now reports `SKIPPED` instead of a misleading `OK` with a null score.
 - **Loud failure for a dead pytest interpreter (G11).** A relative `--python`
   path used to evaporate after the child process switched its working
   directory to the worktree: pytest silently never ran and the whole run

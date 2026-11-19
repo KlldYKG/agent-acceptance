@@ -125,6 +125,15 @@ def test_parse_mutation_missing_file(tmp_path):
     assert (mut.status, mut.score) == ("SKIPPED", None)
 
 
+def test_parse_mutation_zero_mutants_is_skipped(tmp_path):
+    # Baseline failure (e.g. broken PR tests aborting the mutation baseline)
+    # yields a well-formed junitxml with zero testcase elements. That must
+    # read as "phase produced no data", not an OK/null score.
+    (tmp_path / "mutation.xml").write_text("<testsuite></testsuite>")
+    mut = parse_mutation(tmp_path / "mutation.xml")
+    assert (mut.status, mut.killed, mut.survived, mut.score) == ("SKIPPED", 0, 0, None)
+
+
 # ---------------------------------------------------------------- end-to-end evaluate
 def test_evaluate_demo_fixture_shape(tmp_path):
     """Mirror the D2 demo outcome: 2 valid tests -> STRONG / EVIDENCE_OK."""

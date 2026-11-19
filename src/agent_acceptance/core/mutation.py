@@ -15,6 +15,7 @@ fabricated.
 
 from __future__ import annotations
 
+import os
 import shutil
 import subprocess
 import tempfile
@@ -33,16 +34,22 @@ class MutationOutcome:
     xml_path: Path | None = None
 
 
-def write_mutmut_config(tree: Path, test_paths: list[str], src_paths: list[str]) -> Path:
+def write_mutmut_config(
+    tree: Path, test_paths: list[str], src_paths: list[str], python_exe: str = "python"
+) -> Path:
     """Write/merge the ``[mutmut]`` section of ``setup.cfg`` inside *tree*.
 
     Existing content outside ``[mutmut]`` (e.g. ``[tool:pytest]`` of the
-    target project) is preserved verbatim.
+    target project) is preserved verbatim. ``python_exe`` is interpolated
+    into the runner *by absolute path*: mutmut executes the runner through a
+    shell whose PATH does not necessarily carry the interpreter that has the
+    target project (and pytest) installed — a bare ``python`` silently runs
+    the baseline against the wrong environment and yields zero mutants.
     """
     cfg_path = tree / "setup.cfg"
     section = (
         "[mutmut]\n"
-        f"runner=python -m pytest -x -q -p no:cacheprovider {' '.join(test_paths)}\n"
+        f"runner={python_exe} -m pytest -x -q -p no:cacheprovider {' '.join(test_paths)}\n"
         f"paths_to_mutate={','.join(src_paths)}\n"
     )
     try:
@@ -74,8 +81,11 @@ def run_mutation(
         return MutationOutcome(result=MutationResult(status="SKIPPED"))
 
     # Same relative-path trap as overlay.run_pytest (G11): the child cwd is a
-    # worktree, so resolve the interpreter against the invoker's cwd up front.
-    python_exe = str(Path(python_exe).resolve())
+    # worktree, so normalize the interpreter path up front. Crucially this is
+    # *abspath*, not resolve(): venv ``bin/python`` is a symlink to the base
+    # interpreter, and resolve() would silently retarget mutmut to the system
+    # python — where the engine (and the target deps) are not installed.
+    python_exe = os.path.abspath(python_exe)
     repo = Path(repo).resolve()
     mut_tree: Path | None = None
     tmp_work = None
@@ -84,7 +94,7 @@ def run_mutation(
         if work_root is None:
             tmp_work = str(root)
         mut_tree = add_worktree(repo, head, root / "mut-tree")
-        write_mutmut_config(mut_tree, changes.tests, changes.srcs)
+        write_mutmut_config(mut_tree, changes.tests, changes.srcs, python_exe)
 
         try:
             subprocess.run(

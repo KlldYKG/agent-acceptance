@@ -57,6 +57,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
             repo, args.base, args.head, out_dir,
             test_dirs=test_dirs, python_exe=args.python,
             flaky_n=flaky_n, mutation_budget_s=budget,
+            phase_timeout_s=args.phase_timeout,
         )
     except Exception as exc:  # noqa: BLE001 — surface as usage/infra error
         print(f"error: {exc}", file=sys.stderr)
@@ -160,6 +161,10 @@ def build_parser() -> argparse.ArgumentParser:
     rn.add_argument("--flaky-n", type=int, default=None, metavar="N",
                     help="runs per phase; >1 enables the flaky rule "
                          "(default: policy on base, 3; report mode may use 1)")
+    rn.add_argument("--phase-timeout", type=int, default=900, metavar="S",
+                    help="wall-clock limit in seconds per pytest phase; a "
+                         "phase exceeding it degrades the verdict to ERROR "
+                         "instead of hanging (default: 900, 0 disables)")
     rn.add_argument("--gate", dest="gate_flag", action="store_true", default=None,
                     help="gate mode: exit non-zero on invalid evidence "
                          "(default: policy on base, off)")

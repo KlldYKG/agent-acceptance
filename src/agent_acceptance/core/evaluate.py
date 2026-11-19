@@ -102,7 +102,10 @@ def parse_mutation(path: Path, forced_status: str | None = None) -> MutationResu
 
     mutmut marks *survived* mutants with a <skipped> element. If the phase did
     not finish within budget (forced_status set), we report the declared status
-    and never fabricate a score.
+    and never fabricate a score. An XML with **zero** testcase elements means
+    mutmut never measured a mutant (typically: the baseline test run failed —
+    e.g. broken PR tests abort the mutation baseline), so the phase reports
+    SKIPPED rather than an OK/null score.
     """
     if forced_status is not None or not path.exists():
         return MutationResult(status=forced_status or "SKIPPED")
@@ -120,6 +123,10 @@ def parse_mutation(path: Path, forced_status: str | None = None) -> MutationResu
         else:
             killed += 1
     total = killed + survived
+    if total == 0:
+        # No mutant was ever measured: an OK/null score here would read as
+        # "phase ran, nothing to report" when in fact it never ran.
+        return MutationResult(status="SKIPPED")
     return MutationResult(
         status="OK",
         killed=killed,

@@ -7,4 +7,4 @@ time-budgeted mutation sampling reports which behaviors the new tests leave
 unpinned. No LLM anywhere in the gate.
 """
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
